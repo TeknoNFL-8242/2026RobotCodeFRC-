@@ -1,0 +1,175 @@
+package frc.robot;
+
+import edu.wpi.first.wpilibj.TimedRobot;
+import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj.drive.DifferentialDrive;
+import com.ctre.phoenix.motorcontrol.can.WPI_VictorSPX;
+import edu.wpi.first.cameraserver.CameraServer;
+
+
+public class Robot extends TimedRobot {
+    // Motor Kontrolcüleri (Victor SPX)
+    private final WPI_VictorSPX left1 = new WPI_VictorSPX(3);
+    private final WPI_VictorSPX left2 = new WPI_VictorSPX(4);
+    private final WPI_VictorSPX right1 = new WPI_VictorSPX(1);
+    private final WPI_VictorSPX right2 = new WPI_VictorSPX(2);
+    
+    // Mekanizma Motorları (El/Asansör vb.)
+    //private final WPI_VictorSPX el1 = new WPI_VictorSPX(5);
+    //private final WPI_VictorSPX el2 = new WPI_VictorSPX(6);
+
+    private double leftPower = 0;
+    private double rightPower = 0;
+
+    private DifferentialDrive m_drive;
+    private final LogitechExtreme3DProController m_stick = new LogitechExtreme3DProController(0);
+    private final Timer m_timer = new Timer();
+    
+    private SendableChooser<String> autoChooser = new SendableChooser<>();
+    private String selectedAuto;
+    
+    // Otonom modlarının isimleri
+    private static final String duz_oto = "İleri";
+    private static final String geri_oto = "Geri";
+
+    private final double a = 2.9;
+    private final double k = 2.3; // Logaritmik dönüş hassasiyeti
+    private final double LOG_K = Math.log(1.0 + k); // Sabit değer, bir kere hesaplanır
+
+    @Override
+    public void robotInit() {
+        // Arka motorları ön motorlara bağlıyoruz (Follower modu)
+        left2.follow(left1);
+        right2.follow(right1);
+
+        // DifferentialDrive sadece ana motorları bilmeli
+        m_drive = new DifferentialDrive(left1, right1);
+
+        // Otonom seçeneklerini ekle
+        autoChooser.setDefaultOption(duz_oto, duz_oto);
+        autoChooser.addOption(geri_oto, geri_oto);
+        
+        // SmartDashboard'a gönder
+        SmartDashboard.putData("Otonom Seçimi", autoChooser);
+
+        CameraServer.startAutomaticCapture();
+    }
+
+    @Override
+    public void autonomousInit() {
+        m_timer.restart();
+        // Seçilen modu al
+        selectedAuto = autoChooser.getSelected();
+        System.out.println("Seçilen otonom: " + selectedAuto);
+    }
+
+    @Override
+    public void autonomousPeriodic() {
+        if (m_timer.get() < 5.0) {
+        // Seçilen moda göre çalıştır
+        // eyvallah Salih
+        switch(selectedAuto) {
+            case duz_oto:
+                // Sol pozisyon kodu
+                duz();
+                break;
+            case geri_oto:
+                // Sağ pozisyon kodu
+                geri();
+                break;
+            default:
+                m_drive.tankDrive(0, 0);
+                break;
+        }
+        } else {
+            m_drive.tankDrive(0, 0);
+        }
+    }
+    
+    private void duz() {
+        m_drive.tankDrive(0.8, 0.8);
+    }
+    
+    private void geri() {
+        m_drive.tankDrive(-1, -1);
+    }
+
+    @Override
+    public void autonomousExit() {
+        m_timer.stop();
+    }
+
+  @Override
+public void teleopPeriodic() {
+    double y_ax = -m_stick.getJoystickY();  // İleri/Geri
+    double x_ax = -m_stick.getJoystickX();  // Sağa/Sola
+    double z_ax = -m_stick.getJoystickZ();  // Yerinde dönüş
+    boolean button1 = m_stick.getButtonOne();
+    boolean zlock = false;
+    double zlockdeadband= 0.13;
+    boolean isYcentered = Math.abs(y_ax) < zlockdeadband;
+    boolean isXcentered = Math.abs(x_ax) < zlockdeadband ;
+
+
+    if (!isXcentered || isYcentered){
+        zlock = false;
+    }
+
+    if(isXcentered && isYcentered || !zlock ){
+        zlock = true;
+    }
+
+
+    if (button1) {
+        leftPower = y_ax;
+        rightPower = y_ax;
+    }
+    else if ((Math.abs(z_ax) == 0 && Math.abs(x_ax) == 0 && Math.abs(y_ax) == 0) && !zlock) { //z ekseni eğer 0 a geldiğinde büyük bir değerdeyse dönüş yapmamasını sağlar
+        leftPower = z_ax;
+        rightPower = -z_ax;    
+    }
+    else if (Math.abs(x_ax) > 0 && Math.abs(y_ax) > 0) {
+        double xAbs = Math.abs(x_ax);
+        double yAbs = Math.abs(y_ax);
+
+        // Logaritmik dönüş oranı (0..1)
+        double f = Math.log(1.0 + k * xAbs) / LOG_K;
+
+        // düşük hızda dış paleti boost’layan g(y)
+        double g = Math.pow(1.0 - yAbs, a);
+
+        if (x_ax > 0 && y_ax > 0) {
+            // İleri + sağa dönüş
+            leftPower = yAbs + yAbs * f * g;
+            rightPower = yAbs * (1.0 - f);
+
+        } else if (x_ax < 0 && y_ax > 0) {
+            // İleri + sola dönüş
+            leftPower = yAbs * (1.0 - f);
+            rightPower = yAbs + yAbs * f * g;
+
+        } else if (x_ax > 0 && y_ax < 0) {
+            // Geri + sağa dönüş
+            leftPower = -yAbs - yAbs * f * g;
+            rightPower = -yAbs * (1.0 - f);
+
+        } else if (x_ax < 0 && y_ax < 0) {
+            // Geri + sola dönüş
+            leftPower = -yAbs * (1.0 - f);
+            rightPower = -yAbs - yAbs * f * g;
+        }
+    }
+    else if (Math.abs(y_ax) > 0) {
+        leftPower = y_ax;
+        rightPower = y_ax;
+    }
+    else {
+        leftPower = 0;
+        rightPower = 0;
+    }
+
+    m_drive.tankDrive(leftPower, rightPower);
+}
+}

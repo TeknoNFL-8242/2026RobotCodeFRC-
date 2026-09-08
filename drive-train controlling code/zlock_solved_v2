@@ -1,0 +1,175 @@
+package frc.robot;
+
+import edu.wpi.first.wpilibj.TimedRobot;
+import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj.drive.DifferentialDrive;
+import com.ctre.phoenix.motorcontrol.can.WPI_VictorSPX;
+import edu.wpi.first.cameraserver.CameraServer;
+
+
+public class Robot extends TimedRobot {
+    private final WPI_VictorSPX left1 = new WPI_VictorSPX(3);
+    private final WPI_VictorSPX left2 = new WPI_VictorSPX(4);
+    private final WPI_VictorSPX right1 = new WPI_VictorSPX(1);
+    private final WPI_VictorSPX right2 = new WPI_VictorSPX(2);
+    
+    private double leftPower = 0;
+    private double rightPower = 0;
+
+    private DifferentialDrive m_drive;
+    private final LogitechExtreme3DProController m_stick = new LogitechExtreme3DProController(0);
+    private final Timer m_timer = new Timer();
+    
+    private boolean zlock = false;
+    private double previousY = 0;
+    private boolean wasMoving = false;
+    private Timer zlockTimer = new Timer();
+    private static final double ZLOCK_DURATION = 5.0;
+    private static final double MOVEMENT_THRESHOLD = 0.15;
+    private static final double DECELERATION_THRESHOLD = 0.05;
+    
+    private SendableChooser<String> autoChooser = new SendableChooser<>();
+    private String selectedAuto;
+    
+    private static final String duz_oto = "İleri";
+    private static final String geri_oto = "Geri";
+
+    private final double a = 2.9;
+    private final double k = 2.3;
+    private final double LOG_K = Math.log(1.0 + k);
+
+    @Override
+    public void robotInit() {
+        left2.follow(left1);
+        right2.follow(right1);
+        m_drive = new DifferentialDrive(left1, right1);
+
+        autoChooser.setDefaultOption(duz_oto, duz_oto);
+        autoChooser.addOption(geri_oto, geri_oto);
+        SmartDashboard.putData("Otonom Seçimi", autoChooser);
+
+        CameraServer.startAutomaticCapture();
+    }
+
+    @Override
+    public void autonomousInit() {
+        m_timer.restart();
+        selectedAuto = autoChooser.getSelected();
+        System.out.println("Seçilen otonom: " + selectedAuto);
+    }
+
+    @Override
+    public void autonomousPeriodic() {
+        if (m_timer.get() < 5.0) {
+            switch(selectedAuto) {
+                case duz_oto:
+                    duz();
+                    break;
+                case geri_oto:
+                    geri();
+                    break;
+                default:
+                    m_drive.tankDrive(0, 0);
+                    break;
+            }
+        } else {
+            m_drive.tankDrive(0, 0);
+        }
+    }
+    
+    private void duz() {
+        m_drive.tankDrive(0.8, 0.8);
+    }
+    
+    private void geri() {
+        m_drive.tankDrive(-1, -1);
+    }
+
+    @Override
+    public void autonomousExit() {
+        m_timer.stop();
+    }
+
+    @Override
+    public void teleopPeriodic() {
+        double y_ax = -m_stick.getJoystickY();
+        double x_ax = -m_stick.getJoystickX();
+        double z_ax = -m_stick.getJoystickZ();
+        boolean button1 = m_stick.getButtonOne();
+
+        boolean isMoving = Math.abs(y_ax) > MOVEMENT_THRESHOLD;
+        
+        double yChange = Math.abs(previousY - y_ax);
+        boolean isDecelerating = yChange > DECELERATION_THRESHOLD && Math.abs(y_ax) < Math.abs(previousY);
+        
+        if (isMoving) {
+            wasMoving = true;
+            zlock = false;
+            zlockTimer.stop();
+            zlockTimer.reset();
+        } 
+        else if (wasMoving && !isMoving && isDecelerating) {
+            if (!zlockTimer.hasElapsed(0)) {
+                zlockTimer.restart();
+            }
+            zlock = true;
+            wasMoving = false;
+        }
+        
+        if (zlock && zlockTimer.hasElapsed(ZLOCK_DURATION)) {
+            zlock = false;
+            zlockTimer.stop();
+            zlockTimer.reset();
+        }
+
+        previousY = y_ax;
+
+        if (button1) {
+            leftPower = y_ax;
+            rightPower = y_ax;
+        }
+        else if (zlock && Math.abs(z_ax) > 0) {
+            leftPower = 0;
+            rightPower = 0;
+        }
+        else if (Math.abs(x_ax) > 0 && Math.abs(y_ax) > 0) {
+            double xAbs = Math.abs(x_ax);
+            double yAbs = Math.abs(y_ax);
+            double f = Math.log(1.0 + k * xAbs) / LOG_K;
+            double g = Math.pow(1.0 - yAbs, a);
+
+            if (x_ax > 0 && y_ax > 0) {
+                leftPower = yAbs + yAbs * f * g;
+                rightPower = yAbs * (1.0 - f);
+            } else if (x_ax < 0 && y_ax > 0) {
+                leftPower = yAbs * (1.0 - f);
+                rightPower = yAbs + yAbs * f * g;
+            } else if (x_ax > 0 && y_ax < 0) {
+                leftPower = -yAbs - yAbs * f * g;
+                rightPower = -yAbs * (1.0 - f);
+            } else if (x_ax < 0 && y_ax < 0) {
+                leftPower = -yAbs * (1.0 - f);
+                rightPower = -yAbs - yAbs * f * g;
+            }
+        }
+        else if (Math.abs(y_ax) > 0) {
+            leftPower = y_ax;
+            rightPower = y_ax;
+        }
+        else if (Math.abs(z_ax) > 0 && !zlock) {
+            leftPower = z_ax;
+            rightPower = -z_ax;
+        }
+        else {
+            leftPower = 0;
+            rightPower = 0;
+        }
+
+        m_drive.tankDrive(leftPower, rightPower);
+        
+        SmartDashboard.putBoolean("Z-Lock Active", zlock);
+        SmartDashboard.putNumber("Z-Lock Timer", zlockTimer.get());
+    }
+}
